@@ -2,7 +2,7 @@ from fastapi import FastAPI
 
 app = FastAPI(name="rag-chatbot")
 
-@app.get("/")
+@app.get("/health")
 async def health_check():
     return {"message": "Hello from rag-chatbot!"}
 
