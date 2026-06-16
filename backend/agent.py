@@ -47,8 +47,35 @@ def router_node(state:AgentState)-> AgentState:
 
     if web_search_enabled:
         system_prompt += (
-            
+            "You **CAN** use web search for queries that require very current, real-time, or broad general knowledge "
+            "that is unlikely to be in a specific, static knowledge base (e.g., today's news, live data, very recent events)."
+            "\n\nChoose one of the following routes:"
+            "\n- 'rag': For queries about specific entities, historical facts, product details, procedures, or any information that would typically be found in a curated document collection (e.g., 'What is X?', 'How does Y work?', 'Explain Z policy')."
+            "\n- 'web': For queries about current events, live data, very recent news, or broad general knowledge that requires up-to-date internet access (e.g., 'Who won the election yesterday?', 'What is the weather in London?', 'Latest news on technology')." 
         )
-        pass
+
+    else:
+        system_prompt += (
+            "**Web search is currently DISABLED.** You **MUST NOT** choose the 'web' route."
+            "If a query would normally require web search, you should attempt to answer it using RAG (if applicable) or directly from your general knowledge."
+            "\n\nChoose one of the following routes:"
+            "\n- 'rag': For queries about specific entities, historical facts, product details, procedures, or any information that would typically be found in a curated document collection, AND for queries that would normally go to web search but web search is disabled."
+            "\n- 'answer': For very simple, direct questions you can answer without any external lookup (e.g., 'What is your name?')."
+        )
+
+    system_prompt += (
+        "\n- 'answer': For very simple, direct questions you can answer without any external lookup (e.g., 'What is your name?')."
+        "\n- 'end': For pure greetings or small-talk where no factual answer is expected (e.g., 'Hi', 'How are you?'). If choosing 'end', you MUST provide a 'reply'."
+        "\n\nExample routing decisions:"
+        "\n- User: 'What are the treatment of diabetes?' -> Route: 'rag' (Factual knowledge, likely in KB)."
+        "\n- User: 'What is the capital of France?' -> Route: 'rag' (Common knowledge, can be in KB or answered directly if LLM knows)."
+        "\n- User: 'Who won the NBA finals last night?' -> Route: 'web' (Current event, requires live data)."
+        "\n- User: 'How do I submit an expense report?' -> Route: 'rag' (Internal procedure)."
+        "\n- User: 'Tell me about quantum computing.' -> Route: 'rag' (Foundational knowledge can be in KB. If KB is sparse, judge will route to web if enabled)."
+        "\n- User: 'Hello there!' -> Route: 'end', reply='Hello! How can I assist you today?'"
+    )
+
+        
+       
 
     return state
