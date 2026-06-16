@@ -37,4 +37,21 @@ def get_retriever():
 # upload documents to vector store
 def add_document(text_content:str):
     """Adds a document to the Pinecone vector store"""
-    pass
+   
+    if not text_content:
+        raise ValueError("Text content cannot be empty") 
+
+
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200,
+        add_start_index=True
+        )
+
+#create langchain documents from text content
+    documents = text_splitter.create_documents([text_content])
+
+    print("Splitting document into chunk for indexing...")
+    vectorstore = PineconeVectorStore(index_name=INDEX_NAME, embedding=embeddings)
+    vectorstore.add_documents(documents)
+    print("Document added to vector store")
