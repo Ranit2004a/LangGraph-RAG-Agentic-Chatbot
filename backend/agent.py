@@ -34,17 +34,21 @@ class AgentState(TypedDict, total=False):
 def router_node(state:AgentState)-> AgentState:
     """Router node to decide the next action based on the conversation context"""
     print("Router node invoked")
-    query=next( m.content for m in reversed(state["messages"]) if isinstance(m,HumanMessage))
-    if isinstance(m,HumanMessage):
-        for m in reversed(state["messages"]):
-            next(m.content)
+    query=next(( m.content for m in reversed(state["messages"]) if isinstance(m,HumanMessage)),"")
+    web_search_enabled = state.get("web_search_enabled", True)
+    print(f"Router received web search info :{web_search_enabled}")
 
-    else:        
-    messages = state.get("messages", [])
-    response = router_llm(messages)
-    decision = response.output
-    state["route"] = decision.route
-    if decision.route == "end":
-        state["rag"] = None
-        state["web"] = None
-    return state 
+    system_prompt = (
+        "you are an intelligent routing agent designed to direct user quaries to the most approprite tool."
+        "Your primary goal is to provide accurate and relevant information by selecting the best source."
+        "prioritize using the **internal knowledge base (RAG)** for factual information that is likely."
+        "to be contained within pre-uploaded documents for common, well-established facts"
+    )
+
+    if web_search_enabled:
+        system_prompt += (
+            
+        )
+        pass
+
+    return state
