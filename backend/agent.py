@@ -1,5 +1,5 @@
 from typing import TypedDict, List, Literal
-from langchain_core.messages import  BaseMessage
+from langchain_core.messages import  BaseMessage,HumanMessage,AIMessage,SystemMessage
 from pydantic import BaseModel,Field
 from langchain_groq import ChatGroq
 import os
@@ -29,4 +29,22 @@ class AgentState(TypedDict, total=False):
     web_search_enabled: bool
 
 
-#Node
+#Node: for individual functions
+#NODE: router(decision node)
+def router_node(state:AgentState)-> AgentState:
+    """Router node to decide the next action based on the conversation context"""
+    print("Router node invoked")
+    query=next( m.content for m in reversed(state["messages"]) if isinstance(m,HumanMessage))
+    if isinstance(m,HumanMessage):
+        for m in reversed(state["messages"]):
+            next(m.content)
+
+    else:        
+    messages = state.get("messages", [])
+    response = router_llm(messages)
+    decision = response.output
+    state["route"] = decision.route
+    if decision.route == "end":
+        state["rag"] = None
+        state["web"] = None
+    return state 
