@@ -103,4 +103,11 @@ out={
 if router_overrider_reason:
     out["nitial_router_decision"]=initial_router_decision
     out["router_overrider_reason"]=router_overrider_reason
-    
+
+if result.route== "end":
+    out["messages"]=state["messages"]+[AIMessage(content=result.reply or "Hello!")]
+
+
+print("Existing router_node")
+return out
+
