@@ -3,7 +3,7 @@ from langchain_core.messages import  BaseMessage,HumanMessage,AIMessage,SystemMe
 from pydantic import BaseModel,Field
 from langchain_groq import ChatGroq
 import os
-from config import GROQ_API_KEY,TAVIL_API_KEY, PINECONE_API_KEY 
+from config import GROQ_API_KEY, TAVILY_API_KEY, PINECONE_API_KEY 
 
 
 #pydentic schema for strctured output 
@@ -82,32 +82,30 @@ def router_node(state:AgentState)-> AgentState:
 
     result : RouteDecision=router_llm.invoke(messages)
     initial_router_decision=result.route
-    router_overrider_reason=None
+    router_override_reason=None
 
-  #override the route decision to go for web search
-  if not web_search_enabled and result.route=="web":
-    result.router="rag"
-    router_override_reason="Web search disabled bu user; redirected to rag" 
-    print(f"Router decision overriden : changed from 'web' to 'rag'.")
- print(f"Router final decision:{result.route},reply (if 'end'):{result.reply}")
-
-
-out={
-    ""
-    "messages":state['messages'],
-    "router":result.route,
-    "web_search_enabled":web_search_enabled
-
-}
-
-if router_overrider_reason:
-    out["nitial_router_decision"]=initial_router_decision
-    out["router_overrider_reason"]=router_overrider_reason
-
-if result.route== "end":
-    out["messages"]=state["messages"]+[AIMessage(content=result.reply or "Hello!")]
+    #override the route decision to go for web search
+    if not web_search_enabled and result.route=="web":
+        result.route="rag"
+        router_override_reason="Web search disabled by user; redirected to rag" 
+        print(f"Router decision overriden : changed from 'web' to 'rag'.")
+    print(f"Router final decision:{result.route},reply (if 'end'):{result.reply}")
 
 
-print("Existing router_node")
-return out
+    out={
+        "messages":state['messages'],
+        "route":result.route,
+        "web_search_enabled":web_search_enabled
+    }
+
+    if router_override_reason:
+        out["initial_router_decision"]=initial_router_decision
+        out["router_override_reason"]=router_override_reason
+
+    if result.route== "end":
+        out["messages"]=state["messages"]+[AIMessage(content=result.reply or "Hello!")]
+
+
+    print("Exiting router_node")
+    return out
 
