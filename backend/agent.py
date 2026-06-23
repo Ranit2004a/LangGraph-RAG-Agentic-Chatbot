@@ -3,6 +3,9 @@ from langchain_core.messages import  BaseMessage,HumanMessage,AIMessage,SystemMe
 from pydantic import BaseModel,Field
 from langchain_core.tools import tool
 from langchain_groq import ChatGroq
+from langchain_tavily import TavilySearch
+from langgraph.graph import StateGraph,END
+from langgraph.checkpoint.memory import MemorySaver
 import os
 from config import GROQ_API_KEY, TAVILY_API_KEY, PINECONE_API_KEY 
 from vectorstore import get_retriever
@@ -10,6 +13,26 @@ from vectorstore import get_retriever
 
 
 # tools 
+os.environ["TAVILY_API_KEY"]=TAVILY_API_KEY
+tavily=TavilySearch(max_results=3,topic="general")
+
+@tool
+def web_search_tool(query: str) -> str:
+    """Up-to-date web info via Tavily"""
+    try:
+        result = tavily.invoke({"query": query})
+        if isinstance(result, dict) and 'results' in result:
+            formatted_results = []
+            for item in result['results']:
+                title = item.get('title', 'No title')
+                content = item.get('content', 'No content')
+                url = item.get('url', '')
+                formatted_results.append(f"Title: {title}\nContent: {content}\nURL: {url}")
+            return "\n\n".join(formatted_results) if formatted_results else "No results found"
+        else:
+            return str(result)
+    except Exception as e:
+        return f"WEB_ERROR::{e}"
 
 @tool 
 def rag_search_tool(query:str)->str:
@@ -160,3 +183,123 @@ def rag_node(state: AgentState) -> AgentState:
     verdict: RagJudge = judge_llm.invoke(judge_messages)
     print(f"RAG Judge verdict: {verdict.sufficient}")
     print("--- Exiting rag_node ---")
+
+    # decide next route  based  on web search info 
+    if verdict.sufficient:
+        next_route="answer"
+    else:
+        next_route="web" if web_search_enabled else "answer"
+        print(f"RAG nor sufficient. web search enable :{web_search_enabled}.Next route:{next_route} ")
+
+    return {
+        **state,
+        "rag":chunks,
+        "route":next_route,
+        "web_search_enabled":web_search_enabled
+    }        
+
+#Node 3 : wed search 
+def web_node(state:AgentState)->AgentState:
+    print("Entering web_node")
+    query = next((m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)), "")
+    web_search_enabled=state.get("web_search_enabled",True)
+    if not web_search_enabled:
+        print("web search node entered but search is disable")
+        return {**state,"web":"web search was disabled by user","route":"answer"}
+    
+    print(f"web search query:{query}")
+    snippets=web_search_tool.invoke(query)
+
+    if snippets.startswith("WEB_ERROR::"):
+        print (f"web Error :{snippets}.Predicting to answer with limited info ")
+        return{**state,"web":"","route":"answer"}
+    
+    print(f"web snippets retrieved:{snippets[:200]}...")
+    print("--- Exiting web_node ---")
+    return {**state, "web": snippets, "route": "answer"}
+
+# --- Node 4: final answer ---
+def answer_node(state: AgentState) -> AgentState:
+    print("\n--- Entering answer_node ---")
+    user_q = next((m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)), "")
+    
+    ctx_parts = []
+    if state.get("rag"):
+        ctx_parts.append("Knowledge Base Information:\n" + state["rag"])
+    if state.get("web"):
+        # If web search was disabled, the 'web' field might contain a message like "Web search was disabled..."
+        # We should only include actual search results here.
+        if state["web"] and not state["web"].startswith("Web search was disabled"):
+            ctx_parts.append("Web Search Results:\n" + state["web"])
+    
+    context = "\n\n".join(ctx_parts)
+    if not context.strip():
+        context = "No external context was available for this query. Try to answer based on general knowledge if possible."
+
+    prompt = f"""Please answer the user's question using the provided context.
+If the context is empty or irrelevant, try to answer based on your general knowledge.
+
+Question: {user_q}
+
+Context:
+{context}
+
+Provide a helpful, accurate, and concise response based on the available information."""
+
+    print(f"Prompt sent to answer_llm: {prompt[:500]}...")
+    ans = answer_llm.invoke([HumanMessage(content=prompt)]).content
+    print(f"Final answer generated: {ans[:200]}...")
+    print("--- Exiting answer_node ---")
+    return {
+        **state,
+        "messages": state["messages"] + [AIMessage(content=ans)]
+    }
+
+# --- Routing helpers ---
+def from_router(st: AgentState) -> Literal["rag", "web", "answer", "end"]:
+    return st["route"]
+
+def after_rag(st: AgentState) -> Literal["answer", "web"]:
+    return st["route"]
+
+def after_web(_) -> Literal["answer"]:
+    return "answer"
+
+# --- Build graph ---
+def build_agent():
+    """Builds and compiles the LangGraph agent."""
+    g = StateGraph(AgentState)
+    g.add_node("router", router_node)
+    g.add_node("rag_lookup", rag_node)
+    g.add_node("web_search", web_node)
+    g.add_node("answer", answer_node)
+
+    g.set_entry_point("router")
+    
+    g.add_conditional_edges(
+        "router",
+        from_router,
+        {
+            "rag": "rag_lookup",
+            "web": "web_search",
+            "answer": "answer",
+            "end": END
+        }
+    )
+    
+    g.add_conditional_edges(
+        "rag_lookup",
+        after_rag,
+        {
+            "answer": "answer",
+            "web": "web_search"
+        }
+    )
+    
+    g.add_edge("web_search", "answer")
+    g.add_edge("answer", END)
+
+    agent = g.compile(checkpointer=MemorySaver())
+    return agent
+
+rag_agent = build_agent()    
