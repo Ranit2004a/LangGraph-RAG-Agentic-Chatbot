@@ -1,3 +1,4 @@
+# rag_agent_app/backend/main.py
 
 import os
 import time
@@ -13,7 +14,7 @@ from langchain_community.document_loaders import PyPDFLoader
 
 
 from agent import rag_agent
-from vectorstore import add_document_to_vectorstore
+from vectorstore import add_document
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -73,7 +74,7 @@ async def upload_document(file: UploadFile = File(...)):
         total_chunks_added = 0
         if documents:
             full_text_content = "\n\n".join([doc.page_content for doc in documents])
-            add_document_to_vectorstore(full_text_content)
+            add_document(full_text_content)
             total_chunks_added = len(documents)
         
         return DocumentUploadResponse(

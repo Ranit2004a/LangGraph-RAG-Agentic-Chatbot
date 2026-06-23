@@ -1,20 +1,23 @@
-from typing import TypedDict, List, Literal
-from langchain_core.messages import  BaseMessage,HumanMessage,AIMessage,SystemMessage
-from pydantic import BaseModel,Field
+# rag_agent_app/backend/agent.py
+
+import os
+from typing import List, Literal, TypedDict
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import tool
 from langchain_groq import ChatGroq
 from langchain_tavily import TavilySearch
-from langgraph.graph import StateGraph,END
+from pydantic import BaseModel, Field
+from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
-import os
-from config import GROQ_API_KEY, TAVILY_API_KEY, PINECONE_API_KEY 
+from langchain_core.runnables import RunnableConfig # <-- NEW LINE ADDED HERE
+
+# Import API keys from config
+from config import GROQ_API_KEY, TAVILY_API_KEY
 from vectorstore import get_retriever
 
-
-
-# tools 
-os.environ["TAVILY_API_KEY"]=TAVILY_API_KEY
-tavily=TavilySearch(max_results=3,topic="general")
+# --- Tools ---
+os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
+tavily = TavilySearch(max_results=3, topic="general")
 
 @tool
 def web_search_tool(query: str) -> str:
@@ -34,65 +37,63 @@ def web_search_tool(query: str) -> str:
     except Exception as e:
         return f"WEB_ERROR::{e}"
 
-@tool 
-def rag_search_tool(query:str)->str:
-    """tool-k from KB (empty string if none )"""
-
+@tool
+def rag_search_tool(query: str) -> str:
+    """Top-K chunks from KB (empty string if none)"""
     try:
-        retriever_instance=get_retriever()
-        docs=retriever_instance.invoke(query,k=3)
+        retriever_instance = get_retriever()
+        docs = retriever_instance.invoke(query, k=5) # Increased from 3 to 5
         return "\n\n".join(d.page_content for d in docs) if docs else ""
     except Exception as e:
         return f"RAG_ERROR::{e}"
 
-#pydentic schema for strctured output 
+# --- Pydantic schemas for structured output ---
 class RouteDecision(BaseModel):
     route: Literal["rag", "web", "answer", "end"]
-    reply: str | None = Field(None, description="Filled only when router  == 'end'")
-    
+    reply: str | None = Field(None, description="Filled only when route == 'end'")
+
 class RagJudge(BaseModel):
-    sufficient : bool = Field (..., description="True if retrieved documents are sufficient to answer the question, False otherwise")
+    sufficient: bool = Field(..., description="True if retrieved information is sufficient to answer the user's question, False otherwise.")
 
-#LLM Agent state schema
-os.environ["GROQ_API_KEY"] =GROQ_API_KEY  
+# --- LLM instances with structured output where needed ---
+os.environ["GROQ_API_KEY"] = GROQ_API_KEY
 
-router_llm = ChatGroq(model="llama3-70b-8192", api_key=GROQ_API_KEY, temperature=0.0, max_tokens=500).with_structured_output(RouteDecision)
-judge_llm = ChatGroq(model="llama3-70b-8192", api_key=GROQ_API_KEY, temperature=0.0, max_tokens=500).with_structured_output(RagJudge)
-answer_llm = ChatGroq(model="llama3-70b-8192", api_key=GROQ_API_KEY, temperature=0.7, max_tokens=500)
+router_llm = ChatGroq(model="llama3-70b-8192", temperature=0).with_structured_output(RouteDecision)
+judge_llm = ChatGroq(model="llama3-70b-8192", temperature=0).with_structured_output(RagJudge)
+answer_llm = ChatGroq(model="llama3-70b-8192", temperature=0.7)
 
+# --- Shared state type ---
 class AgentState(TypedDict, total=False):
     messages: List[BaseMessage]
     route: Literal["rag", "web", "answer", "end"]
-    rag:str
-    web:str
-    web_search_enabled: bool
+    rag: str
+    web: str
+    web_search_enabled: bool # NEW: Add web search enabled flag to state
 
-
-#Node: for individual functions
-#NODE: router(decision node)
-def router_node(state:AgentState)-> AgentState:
-    """Router node to decide the next action based on the conversation context"""
-    print("Router node invoked")
-    query=next(( m.content for m in reversed(state["messages"]) if isinstance(m,HumanMessage)),"")
-    web_search_enabled = state.get("web_search_enabled", True)
-    print(f"Router received web search info :{web_search_enabled}")
-
+# --- Node 1: router (decision) ---
+def router_node(state: AgentState,config : RunnableConfig) -> AgentState:
+    print("\n--- Entering router_node ---")
+    query = next((m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)), "")
+    
+    # MODIFIED: Get web_search_enabled directly from the config
+    web_search_enabled = config.get("configurable", {}).get("web_search_enabled", True) # <-- CHANGED LINE
+    print(f"Router received web search info : {web_search_enabled}")
+ 
     system_prompt = (
-        "you are an intelligent routing agent designed to direct user quaries to the most approprite tool."
+        "You are an intelligent routing agent designed to direct user queries to the most appropriate tool."
         "Your primary goal is to provide accurate and relevant information by selecting the best source."
-        "prioritize using the **internal knowledge base (RAG)** for factual information that is likely."
-        "to be contained within pre-uploaded documents for common, well-established facts"
+        "Prioritize using the **internal knowledge base (RAG)** for factual information that is likely "
+        "to be contained within pre-uploaded documents or for common, well-established facts."
     )
-
+    
     if web_search_enabled:
         system_prompt += (
             "You **CAN** use web search for queries that require very current, real-time, or broad general knowledge "
             "that is unlikely to be in a specific, static knowledge base (e.g., today's news, live data, very recent events)."
             "\n\nChoose one of the following routes:"
             "\n- 'rag': For queries about specific entities, historical facts, product details, procedures, or any information that would typically be found in a curated document collection (e.g., 'What is X?', 'How does Y work?', 'Explain Z policy')."
-            "\n- 'web': For queries about current events, live data, very recent news, or broad general knowledge that requires up-to-date internet access (e.g., 'Who won the election yesterday?', 'What is the weather in London?', 'Latest news on technology')." 
+            "\n- 'web': For queries about current events, live data, very recent news, or broad general knowledge that requires up-to-date internet access (e.g., 'Who won the election yesterday?', 'What is the weather in London?', 'Latest news on technology')."
         )
-
     else:
         system_prompt += (
             "**Web search is currently DISABLED.** You **MUST NOT** choose the 'web' route."
@@ -114,56 +115,60 @@ def router_node(state:AgentState)-> AgentState:
         "\n- User: 'Hello there!' -> Route: 'end', reply='Hello! How can I assist you today?'"
     )
 
-    messages=[
+    messages = [
         ("system", system_prompt),
-        ("user" , query)
+        ("user", query)
     ]
+    
+    result: RouteDecision = router_llm.invoke(messages)
+    
+    initial_router_decision = result.route # Store the LLM's raw decision
+    router_override_reason = None
 
-    result : RouteDecision=router_llm.invoke(messages)
-    initial_router_decision=result.route
-    router_override_reason=None
-
-    #override the route decision to go for web search
-    if not web_search_enabled and result.route=="web":
-        result.route="rag"
-        router_override_reason="Web search disabled by user; redirected to rag" 
-        print(f"Router decision overriden : changed from 'web' to 'rag'.")
-    print(f"Router final decision:{result.route},reply (if 'end'):{result.reply}")
-
-
-    out={
-        "messages":state['messages'],
-        "route":result.route,
-        "web_search_enabled":web_search_enabled
+    # NEW LOGIC: Override router decision if web search is disabled and LLM chose 'web'
+    if not web_search_enabled and result.route == "web":
+        # If web search is disabled, force it to try RAG instead
+        result.route = "rag" 
+        router_override_reason = "Web search disabled by user; redirected to RAG."
+        print(f"Router decision overridden: changed from 'web' to 'rag' because web search is disabled.")
+    
+    print(f"Router final decision: {result.route}, Reply (if 'end'): {result.reply}")
+    
+    out = {
+        "messages": state["messages"], 
+        "route": result.route,
+        "web_search_enabled": web_search_enabled # Pass the flag along in the state
     }
+    if router_override_reason: # Add override info for tracing
+        out["initial_router_decision"] = initial_router_decision
+        out["router_override_reason"] = router_override_reason
 
-    if router_override_reason:
-        out["initial_router_decision"]=initial_router_decision
-        out["router_override_reason"]=router_override_reason
-
-    if result.route== "end":
-        out["messages"]=state["messages"]+[AIMessage(content=result.reply or "Hello!")]
-
-
-    print("Exiting router_node")
+    if result.route == "end":
+        out["messages"] = state["messages"] + [AIMessage(content=result.reply or "Hello!")]
+    
+    print("--- Exiting router_node ---")
     return out
 
-
-# Node 2 : RAG Lookup
-def rag_node(state: AgentState) -> AgentState:
-    print("Entering rag_node")
+# --- Node 2: RAG lookup ---
+def rag_node(state: AgentState,config:RunnableConfig) -> AgentState:
+    print("\n--- Entering rag_node ---")
     query = next((m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)), "")
-    web_search_enabled=state.get("web_search_enabled",True)  
-    print(f"Router received web search info :{web_search_enabled}")
-    print(f"RAG Query :{query}")
-      
-    chunks=rag_search_tool.invoke(query)
-
-    #logic to handle chunk 
+    # MODIFIED: Get web_search_enabled directly from the config
+    web_search_enabled = config.get("configurable", {}).get("web_search_enabled", True) # <-- CHANGED LINE
+    print(f"Router received web search info : {web_search_enabled}")
+    print(f"RAG query: {query}")
+    chunks = rag_search_tool.invoke(query)
+    
     if chunks.startswith("RAG_ERROR::"):
-        print(f"Retrived RAG chunks : {chunks[:500]}...")
+        print(f"RAG Error: {chunks}. Checking web search enabled status.")
+        # If RAG fails, and web search is enabled, try web. Otherwise, go to answer.
+        next_route = "web" if web_search_enabled else "answer"
+        return {**state, "rag": "", "route": next_route}
+
+    if chunks:
+        print(f"Retrieved RAG chunks (first 500 chars): {chunks[:500]}...")
     else:
-        print("No RAG chunks retrieved") 
+        print("No RAG chunks retrieved.")
 
     judge_messages = [
         ("system", (
@@ -183,38 +188,42 @@ def rag_node(state: AgentState) -> AgentState:
     verdict: RagJudge = judge_llm.invoke(judge_messages)
     print(f"RAG Judge verdict: {verdict.sufficient}")
     print("--- Exiting rag_node ---")
-
-    # decide next route  based  on web search info 
+    
+    # NEW LOGIC: Decide next route based on sufficiency AND web_search_enabled
     if verdict.sufficient:
-        next_route="answer"
+        next_route = "answer"
     else:
-        next_route="web" if web_search_enabled else "answer"
-        print(f"RAG nor sufficient. web search enable :{web_search_enabled}.Next route:{next_route} ")
+        next_route = "web" if web_search_enabled else "answer" # If not sufficient, only go to web if enabled
+        print(f"RAG not sufficient. Web search enabled: {web_search_enabled}. Next route: {next_route}")
 
     return {
         **state,
-        "rag":chunks,
-        "route":next_route,
-        "web_search_enabled":web_search_enabled
-    }        
+        "rag": chunks,
+        "route": next_route,
+        "web_search_enabled": web_search_enabled # Pass the flag along
+    }
 
-#Node 3 : wed search 
-def web_node(state:AgentState)->AgentState:
-    print("Entering web_node")
+# --- Node 3: web search ---
+def web_node(state: AgentState,config:RunnableConfig) -> AgentState:
+    print("\n--- Entering web_node ---")
     query = next((m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)), "")
-    web_search_enabled=state.get("web_search_enabled",True)
+    
+    # Check if web search is actually enabled before performing it
+    # MODIFIED: Get web_search_enabled directly from the config
+    web_search_enabled = config.get("configurable", {}).get("web_search_enabled", True) # <-- CHANGED LINE
+    print(f"Router received web search info : {web_search_enabled}")
     if not web_search_enabled:
-        print("web search node entered but search is disable")
-        return {**state,"web":"web search was disabled by user","route":"answer"}
-    
-    print(f"web search query:{query}")
-    snippets=web_search_tool.invoke(query)
+        print("Web search node entered but web search is disabled. Skipping actual search.")
+        return {**state, "web": "Web search was disabled by the user.", "route": "answer"}
 
-    if snippets.startswith("WEB_ERROR::"):
-        print (f"web Error :{snippets}.Predicting to answer with limited info ")
-        return{**state,"web":"","route":"answer"}
+    print(f"Web search query: {query}")
+    snippets = web_search_tool.invoke(query)
     
-    print(f"web snippets retrieved:{snippets[:200]}...")
+    if snippets.startswith("WEB_ERROR::"):
+        print(f"Web Error: {snippets}. Proceeding to answer with limited info.")
+        return {**state, "web": "", "route": "answer"}
+
+    print(f"Web snippets retrieved: {snippets[:200]}...")
     print("--- Exiting web_node ---")
     return {**state, "web": snippets, "route": "answer"}
 
@@ -302,4 +311,4 @@ def build_agent():
     agent = g.compile(checkpointer=MemorySaver())
     return agent
 
-rag_agent = build_agent()    
+rag_agent = build_agent()

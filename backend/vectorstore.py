@@ -34,24 +34,41 @@ def get_retriever():
     vectorstore = PineconeVectorStore(index_name=INDEX_NAME, embedding=embeddings)
     return vectorstore.as_retriever()
 
-# upload documents to vector store
-def add_document(text_content:str):
+def add_document(text_content: str):
     """Adds a document to the Pinecone vector store"""
-   
-    if not text_content:
-        raise ValueError("Text content cannot be empty") 
 
+    if not text_content:
+        raise ValueError("Text content cannot be empty")
+
+    # Create index if it doesn't exist
+    if INDEX_NAME not in pc.list_indexes().names():
+        print("Creating new index...")
+        pc.create_index(
+            name=INDEX_NAME,
+            dimension=384,
+            metric="cosine",
+            spec=ServerlessSpec(
+                cloud="aws",
+                region="us-east-1"
+            )
+        )
+        print("Index created successfully")
 
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
         chunk_overlap=200,
         add_start_index=True
-        )
+    )
 
-#create langchain documents from text content
     documents = text_splitter.create_documents([text_content])
 
-    print("Splitting document into chunk for indexing...")
-    vectorstore = PineconeVectorStore(index_name=INDEX_NAME, embedding=embeddings)
+    print("Splitting document into chunks for indexing...")
+
+    vectorstore = PineconeVectorStore(
+        index_name=INDEX_NAME,
+        embedding=embeddings
+    )
+
     vectorstore.add_documents(documents)
+
     print("Document added to vector store")
