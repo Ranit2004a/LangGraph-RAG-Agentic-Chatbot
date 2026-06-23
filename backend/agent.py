@@ -1,10 +1,26 @@
 from typing import TypedDict, List, Literal
 from langchain_core.messages import  BaseMessage,HumanMessage,AIMessage,SystemMessage
 from pydantic import BaseModel,Field
+from langchain_core.tools import tool
 from langchain_groq import ChatGroq
 import os
 from config import GROQ_API_KEY, TAVILY_API_KEY, PINECONE_API_KEY 
+from vectorstore import get_retriever
 
+
+
+# tools 
+
+@tool 
+def rag_search_tool(query:str)->str:
+    """tool-k from KB (empty string if none )"""
+
+    try:
+        retriever_instance=get_retriever()
+        docs=retriever_instance.invoke(query,k=3)
+        return "\n\n".join(d.page_content for d in docs) if docs else ""
+    except Exception as e:
+        return f"RAG_ERROR::{e}"
 
 #pydentic schema for strctured output 
 class RouteDecision(BaseModel):
@@ -108,4 +124,24 @@ def router_node(state:AgentState)-> AgentState:
 
     print("Exiting router_node")
     return out
+
+
+# Node 2 : RAG Lookup
+def rag_node(state: AgentState) -> AgentState:
+    print("Entering rag_node")
+    query = next((m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)), "")
+    web_search_enabled=state.get("web_search_enabled",True)  
+    print(f"Router received web search info :{web_search_enabled}")
+    print(f"RAG Query :{query}")
+      
+    chunks=rag_search_tool.invoke(query)
+
+    #logic to handle chunk 
+    if chunks.startswith("RAG_ERROR::"):
+        print(f"Retrived RAG chunks : {chunks[:500]}...")
+    else:
+        print("No RAG chunks retrieved") 
+
+
+
 
