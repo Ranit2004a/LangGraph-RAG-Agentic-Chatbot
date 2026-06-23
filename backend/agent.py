@@ -142,6 +142,21 @@ def rag_node(state: AgentState) -> AgentState:
     else:
         print("No RAG chunks retrieved") 
 
-
-
-
+    judge_messages = [
+        ("system", (
+            "You are a judge evaluating if the **retrieved information** is **sufficient and relevant** "
+            "to fully and accurately answer the user's question. "
+            "Consider if the retrieved text directly addresses the question's core and provides enough detail."
+            "If the information is incomplete, vague, outdated, or doesn't directly answer the question, it's NOT sufficient."
+            "If it provides a clear, direct, and comprehensive answer, it IS sufficient."
+            "If no relevant information was retrieved at all (e.g., 'No results found'), it is definitely NOT sufficient."
+            "\n\nRespond ONLY with a JSON object: {\"sufficient\": true/false}"
+            "\n\nExample 1: Question: 'What is the capital of France?' Retrieved: 'Paris is the capital of France.' -> {\"sufficient\": true}"
+            "\nExample 2: Question: 'What are the symptoms of diabetes?' Retrieved: 'Diabetes is a chronic condition.' -> {\"sufficient\": false} (Doesn't answer symptoms)"
+            "\nExample 3: Question: 'How to fix error X in software Y?' Retrieved: 'No relevant information found.' -> {\"sufficient\": false}"
+        )),
+        ("user", f"Question: {query}\n\nRetrieved info: {chunks}\n\nIs this sufficient to answer the question?")
+    ]
+    verdict: RagJudge = judge_llm.invoke(judge_messages)
+    print(f"RAG Judge verdict: {verdict.sufficient}")
+    print("--- Exiting rag_node ---")
